@@ -97,6 +97,7 @@ impl Node for UiPassNode {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         let pass_span = diagnostics.pass_span(&mut render_pass, "ui");
 
@@ -267,7 +268,6 @@ impl<P: PhaseItem> RenderCommand<P> for DrawUiNode {
         // Define how to "connect" the vertices
         pass.set_index_buffer(
             indices.slice(..),
-            0,
             bevy_render::render_resource::IndexFormat::Uint32,
         );
         // Draw the vertices

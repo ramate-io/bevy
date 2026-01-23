@@ -96,7 +96,7 @@ impl ViewNode for TonemappingNode {
 
                 let bind_group = render_context.render_device().create_bind_group(
                     None,
-                    &tonemapping_pipeline.texture_bind_group,
+                    &pipeline_cache.get_bind_group_layout(&tonemapping_pipeline.texture_bind_group),
                     &BindGroupEntries::sequential((
                         view_uniforms,
                         source,
@@ -130,6 +130,7 @@ impl ViewNode for TonemappingNode {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         };
 
         let mut render_pass = render_context

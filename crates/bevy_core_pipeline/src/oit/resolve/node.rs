@@ -55,7 +55,8 @@ impl ViewNode for OitResolveNode {
 
             let depth_bind_group = render_context.render_device().create_bind_group(
                 "oit_resolve_depth_bind_group",
-                &resolve_pipeline.oit_depth_bind_group_layout,
+                &pipeline_cache
+                    .get_bind_group_layout(&resolve_pipeline.oit_depth_bind_group_layout),
                 &BindGroupEntries::single(depth.view()),
             );
 
@@ -65,6 +66,7 @@ impl ViewNode for OitResolveNode {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             let pass_span = diagnostics.pass_span(&mut render_pass, "oit_resolve");
 

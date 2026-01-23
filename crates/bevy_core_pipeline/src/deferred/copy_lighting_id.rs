@@ -82,7 +82,7 @@ impl ViewNode for CopyDeferredLightingIdNode {
 
         let bind_group = render_context.render_device().create_bind_group(
             "copy_deferred_lighting_id_bind_group",
-            &copy_deferred_lighting_id_pipeline.layout,
+            &pipeline_cache.get_bind_group_layout(&copy_deferred_lighting_id_pipeline.layout),
             &BindGroupEntries::single(&deferred_lighting_pass_id_texture.texture.default_view),
         );
 
@@ -99,6 +99,7 @@ impl ViewNode for CopyDeferredLightingIdNode {
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         let pass_span = diagnostics.pass_span(&mut render_pass, "copy_deferred_lighting_id");
@@ -115,18 +116,17 @@ impl ViewNode for CopyDeferredLightingIdNode {
 
 #[derive(Resource)]
 struct CopyDeferredLightingIdPipeline {
-    layout: BindGroupLayout,
+    layout: BindGroupLayoutDescriptor,
     pipeline_id: CachedRenderPipelineId,
 }
 
 pub fn init_copy_deferred_lighting_id_pipeline(
     mut commands: Commands,
-    render_device: Res<RenderDevice>,
     fullscreen_shader: Res<FullscreenShader>,
     asset_server: Res<AssetServer>,
     pipeline_cache: Res<PipelineCache>,
 ) {
-    let layout = render_device.create_bind_group_layout(
+    let layout = BindGroupLayoutDescriptor::new(
         "copy_deferred_lighting_id_bind_group_layout",
         &BindGroupLayoutEntries::single(
             ShaderStages::FRAGMENT,

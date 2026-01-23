@@ -72,7 +72,7 @@ impl ViewNode for MotionBlurNode {
 
         let bind_group = render_context.render_device().create_bind_group(
             Some("motion_blur_bind_group"),
-            layout,
+            &pipeline_cache.get_bind_group_layout(layout),
             &BindGroupEntries::sequential((
                 post_process.source,
                 &prepass_motion_vectors_texture.texture.default_view,
@@ -94,6 +94,7 @@ impl ViewNode for MotionBlurNode {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         let pass_span = diagnostics.pass_span(&mut render_pass, "motion_blur");
 
