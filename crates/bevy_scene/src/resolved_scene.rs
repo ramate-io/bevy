@@ -197,8 +197,6 @@ pub struct ResolvedScene {
     /// A list of all [`SceneEntityReference`] values associated with this entity. There can be more than one if this scene uses
     /// "flattened" caching.
     pub entity_references: Vec<SceneEntityReference>,
-    /// The [`RelationshipBehavior`] specified by this scene, if any.
-    pub(crate) relationship_behavior: Option<RelationshipBehavior>,
 }
 
 impl core::fmt::Debug for ResolvedScene {
@@ -245,7 +243,7 @@ impl ResolvedScene {
         writer_ops: impl FnOnce(&mut TemplateContext, &mut BundleWriter),
     ) -> Result<(), ApplySceneError> {
         let relationship_behavior = self
-            .relationship_behavior
+            .relationship_behavior_from_scene(context)
             .or_else(|| context.entity.get::<RelationshipBehavior>().copied())
             .unwrap_or_default();
         let mut bundle_writer = bundle_scratch.writer();
@@ -322,6 +320,28 @@ impl ResolvedScene {
         };
 
         Ok(())
+    }
+
+    /// Resolves [`RelationshipBehavior`] from this scene's templates, if present.
+    fn relationship_behavior_from_scene(
+        &self,
+        context: &mut TemplateContext,
+    ) -> Option<RelationshipBehavior> {
+        if let Some(behavior) = self.direct_component_template::<RelationshipBehavior>() {
+            return Some(behavior);
+        }
+
+        type BehaviorTemplate = <RelationshipBehavior as FromTemplate>::Template;
+        let index = self.template_indices.get(&TypeId::of::<BehaviorTemplate>())?;
+        let template = self.component_templates.get(*index)?.as_ref();
+        let behavior_template = (template as &dyn Any).downcast_ref::<BehaviorTemplate>()?;
+        behavior_template.build_template(context).ok()
+    }
+
+    fn direct_component_template<C: Component + Copy>(&self) -> Option<C> {
+        let index = self.template_indices.get(&TypeId::of::<C>())?;
+        let template = self.component_templates.get(*index)?.as_ref();
+        (template as &dyn Any).downcast_ref::<C>().copied()
     }
 
     fn insert_relationship_targets(
@@ -457,47 +477,12 @@ impl ResolvedScene {
         &'a mut self,
         context: &mut ResolveContext,
     ) -> &'a mut T {
-        let type_id = TypeId::of::<T>();
-        let index = *self.template_indices.entry(type_id).or_insert_with(|| {
-            let index = self.component_templates.len();
-            let value = if let Some(cached_patch) = &mut context.cached
-                && let Some(resolved_cached) = &cached_patch.resolved
-                && let Some(cached_template) = resolved_cached.scene.get_direct_erased_template(type_id)
-            {
-                self.cached
-                    .as_mut()
-                    .unwrap()
-                    .duplicate_templates
-                    .insert(type_id);
-                cached_template.clone_template()
-            } else {
-                Box::new(T::default())
-            };
-            self.component_templates.push(value);
-            index
-        });
-
-        let behavior = {
-            let template = (&mut **self.component_templates.get_mut(index).unwrap() as &mut dyn Any)
-                .downcast_mut::<T>()
-                .unwrap();
-            if type_id == TypeId::of::<RelationshipBehavior>() {
-                Some(
-                    *(&*template as &dyn Any)
-                        .downcast_ref::<RelationshipBehavior>()
-                        .unwrap(),
-                )
-            } else {
-                None
-            }
-        };
-        if let Some(behavior) = behavior {
-            self.relationship_behavior = Some(behavior);
-        }
-
-        (&mut **self.component_templates.get_mut(index).unwrap() as &mut dyn Any)
+        (self.get_or_insert_erased_template(context, TypeId::of::<T>(), || Box::new(T::default()))
+            as &mut dyn Any)
+            // PERF: this could be unchecked, given that we control what is stored here
+            // The method isn't stable yet, and it would require making get_or_insert_erased_template unsafe
             .downcast_mut()
-            .unwrap()
+            .expect("template type mismatch in ResolvedScene::get_or_insert_template")
     }
 
     /// This will get the [`ErasedComponentTemplate`] for the given [`TypeId`], if it already exists in this [`ResolvedScene`]. If it doesn't exist,
