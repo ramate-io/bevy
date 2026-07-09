@@ -482,7 +482,7 @@ impl ResolvedScene {
             // PERF: this could be unchecked, given that we control what is stored here
             // The method isn't stable yet, and it would require making get_or_insert_erased_template unsafe
             .downcast_mut()
-            .expect("template type mismatch in ResolvedScene::get_or_insert_template")
+            .unwrap()
     }
 
     /// This will get the [`ErasedComponentTemplate`] for the given [`TypeId`], if it already exists in this [`ResolvedScene`]. If it doesn't exist,
