@@ -528,6 +528,11 @@ impl EntityWorldMutSceneExt for EntityWorldMut<'_> {
             .new_scene_entities
             .push((id, handle));
     }
+
+    fn merge_scene<S: Scene>(&mut self, scene: S) -> Result<(), SpawnSceneError> {
+        self.insert(RelationshipBehavior::Merge);
+        self.apply_scene(scene)
+    }
 }
 
 /// Adds scene functionality to [`EntityWorldMut`].
@@ -591,6 +596,11 @@ pub trait EntityCommandsSceneExt {
     ///
     /// See [`Scene`] for the features of the scene system (and how to use it).
     fn queue_apply_scene<S: Scene>(&mut self, scene: S) -> &mut Self;
+
+    /// Merges the given [`Scene`] into the current entity as soon as [`Commands`] are applied.
+    ///
+    /// See [`EntityWorldMutSceneExt::merge_scene`] for details on merge behavior and its caveats.
+    fn merge_scene<S: Scene>(&mut self, scene: S) -> &mut Self;
 }
 
 impl EntityCommandsSceneExt for EntityCommands<'_> {
@@ -611,6 +621,15 @@ impl EntityCommandsSceneExt for EntityCommands<'_> {
 
     fn queue_apply_scene<S: Scene>(&mut self, scene: S) -> &mut Self {
         self.queue(move |mut entity: EntityWorldMut| entity.queue_apply_scene(scene));
+        self
+    }
+
+    fn merge_scene<S: Scene>(&mut self, scene: S) -> &mut Self {
+        self.queue(move |mut entity: EntityWorldMut| {
+            if let Err(err) = entity.merge_scene(scene) {
+                error!("{err}");
+            }
+        });
         self
     }
 }
@@ -937,6 +956,7 @@ mod tests {
         assert!(!children.contains(&pre_existing));
     }
 
+    /// Tests that the [`EntityWorldMutSceneExt::merge_scene`] function extends children.
     #[test]
     fn merge_scene_extends_children() {
         let mut app = test_app();
