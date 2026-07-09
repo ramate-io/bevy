@@ -6,7 +6,9 @@ use bevy_ecs::{
     entity::Entity,
     error::{BevyError, Result},
     relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget},
-    template::{FromTemplate, SceneEntityReference, SceneEntityReferences, Template, TemplateContext},
+    template::{
+        FromTemplate, SceneEntityReference, SceneEntityReferences, Template, TemplateContext,
+    },
     world::{EntityWorldMut, World},
 };
 use bevy_platform::collections::HashSet;
@@ -332,7 +334,9 @@ impl ResolvedScene {
         }
 
         type BehaviorTemplate = <RelationshipBehavior as FromTemplate>::Template;
-        let index = self.template_indices.get(&TypeId::of::<BehaviorTemplate>())?;
+        let index = self
+            .template_indices
+            .get(&TypeId::of::<BehaviorTemplate>())?;
         let template = self.component_templates.get(*index)?.as_ref();
         let behavior_template = (template as &dyn Any).downcast_ref::<BehaviorTemplate>()?;
         behavior_template.build_template(context).ok()
