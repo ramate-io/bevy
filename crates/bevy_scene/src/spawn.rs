@@ -1,6 +1,6 @@
 use crate::{
-    RelationshipBehavior, ResolvedSceneRoot, Scene, SceneList, SceneListPatch, ScenePatch,
-    ScenePatchInstance, SpawnSceneError,
+    self as bevy_scene, bsn, RelationshipBehavior, ResolvedSceneRoot, Scene, SceneList,
+    SceneListPatch, ScenePatch, ScenePatchInstance, SpawnSceneError,
 };
 use alloc::sync::Arc;
 use bevy_asset::{AssetEvent, AssetServer, Assets, Handle};
@@ -484,15 +484,10 @@ pub trait EntityWorldMutSceneExt {
 
     /// Merges the given [`Scene`] into the current entity, retaining and extending existing related entities.
     ///
-    /// This inserts [`RelationshipBehavior::Merge`] on the parent entity before calling [`EntityWorldMutSceneExt::apply_scene`].
-    ///
-    /// This approach is semantically awkward because the merge behavior sticks on the entity after
-    /// the scene is applied. A later [`EntityWorldMutSceneExt::apply_scene`] on the same entity will
-    /// keep merging unless the component is removed or overwritten. An alternative would be for
-    /// `apply_scene` to always insert [`RelationshipBehavior::Overwrite`] afterward, but that would
-    /// clobber any behavior intentionally left on the entity, which is equally awkward. Specifying
-    /// behavior on the scene itself avoids this stickiness.
-    fn merge_scene<S: Scene>(&mut self, scene: S) -> Result<(), SpawnSceneError>;
+    /// This is equivalent to applying a scene that includes [`RelationshipBehavior::Merge`].
+    fn merge_scene<S: Scene>(&mut self, scene: S) -> Result<(), SpawnSceneError> {
+        self.apply_scene((bsn! { RelationshipBehavior::Merge }, scene))
+    }
 }
 
 impl EntityWorldMutSceneExt for EntityWorldMut<'_> {
@@ -927,24 +922,6 @@ mod tests {
     #[derive(Component)]
     struct PreExistingChild;
 
-    fn assert_merge_extends_children(world: &World, root: Entity, pre_existing: Entity) {
-        let children: Vec<Entity> = world
-            .entity(root)
-            .get::<Children>()
-            .map(|c| c.iter().collect())
-            .unwrap_or_default();
-
-        assert_eq!(children.len(), 2);
-        assert!(children.contains(&pre_existing));
-        assert!(
-            children
-                .iter()
-                .filter(|entity| world.entity(**entity).contains::<SceneChild>())
-                .count()
-                == 1
-        );
-    }
-
     /// Tests that documented behavior of [`EntityWorldMutSceneExt::apply_scene`] is correct.
     #[test]
     fn apply_scene_replaces_and_orphans_children() {
@@ -981,7 +958,7 @@ mod tests {
 
     /// Tests that the [`EntityWorldMutSceneExt::merge_scene`] function extends children.
     #[test]
-    fn merge_scene_function_extends_children() {
+    fn merge_scene_extends_children() {
         let mut app = test_app();
         let world = app.world_mut();
 
@@ -993,12 +970,25 @@ mod tests {
         };
         world.entity_mut(root).merge_scene(scene).unwrap();
 
-        assert_merge_extends_children(world, root, pre_existing);
+        let children: Vec<Entity> = world
+            .entity(root)
+            .get::<Children>()
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+
+        assert_eq!(children.len(), 2);
+        assert!(children.contains(&pre_existing));
+        assert!(
+            children
+                .iter()
+                .filter(|entity| world.entity(**entity).contains::<SceneChild>())
+                .count()
+                == 1
+        );
     }
 
-    /// Tests that documented behavior of [`EntityWorldMutSceneExt::apply_scene`] is correct when using [`RelationshipBehavior::Merge`].
     #[test]
-    fn apply_scene_with_merge_insert_extends_children() {
+    fn apply_scene_entity_merge_fallback_extends_children() {
         let mut app = test_app();
         let world = app.world_mut();
 
@@ -1014,6 +1004,42 @@ mod tests {
             .apply_scene(scene)
             .unwrap();
 
-        assert_merge_extends_children(world, root, pre_existing);
+        let children: Vec<Entity> = world
+            .entity(root)
+            .get::<Children>()
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+
+        assert_eq!(children.len(), 2);
+        assert!(children.contains(&pre_existing));
+    }
+
+    #[test]
+    fn apply_scene_scene_behavior_overrides_entity() {
+        let mut app = test_app();
+        let world = app.world_mut();
+
+        let pre_existing = world.spawn(PreExistingChild).id();
+        let root = world.spawn(Name::new("root")).add_child(pre_existing).id();
+
+        let scene = bsn! {
+            RelationshipBehavior::Overwrite
+            Children [ #SceneChild SceneChild ]
+        };
+        world
+            .entity_mut(root)
+            .insert(RelationshipBehavior::Merge)
+            .apply_scene(scene)
+            .unwrap();
+
+        let children: Vec<Entity> = world
+            .entity(root)
+            .get::<Children>()
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+
+        assert_eq!(children.len(), 1);
+        assert!(!children.contains(&pre_existing));
+        assert!(world.entity(children[0]).contains::<SceneChild>());
     }
 }

@@ -6,7 +6,9 @@ use bevy_ecs::{
     entity::Entity,
     error::{BevyError, Result},
     relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget},
-    template::{SceneEntityReference, SceneEntityReferences, Template, TemplateContext},
+    template::{
+        FromTemplate, SceneEntityReference, SceneEntityReferences, Template, TemplateContext,
+    },
     world::{EntityWorldMut, World},
 };
 use bevy_platform::collections::HashSet;
@@ -16,11 +18,13 @@ use thiserror::Error;
 
 /// Controls how scene application handles existing [`RelationshipTarget`] components on the entity.
 ///
-/// Insert this component on an entity before calling [`EntityWorldMutSceneExt::apply_scene`] to
-/// retain and extend existing related entities instead of replacing them.
+/// When applying a scene, the behavior is resolved in this order:
+/// 1. A [`RelationshipBehavior`] component included in the scene
+/// 2. A [`RelationshipBehavior`] component on the entity being applied to
+/// 3. [`RelationshipBehavior::Overwrite`]
 ///
 /// [`EntityWorldMutSceneExt::apply_scene`]: crate::EntityWorldMutSceneExt::apply_scene
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, FromTemplate)]
 pub enum RelationshipBehavior {
     /// Replaces existing [`RelationshipTarget`] components with new collections for the scene's related entities.
     #[default]
@@ -240,10 +244,9 @@ impl ResolvedScene {
         bundle_scratch: &mut BundleScratch,
         writer_ops: impl FnOnce(&mut TemplateContext, &mut BundleWriter),
     ) -> Result<(), ApplySceneError> {
-        let relationship_behavior = context
-            .entity
-            .get::<RelationshipBehavior>()
-            .copied()
+        let relationship_behavior = self
+            .relationship_behavior_from_scene(context)
+            .or_else(|| context.entity.get::<RelationshipBehavior>().copied())
             .unwrap_or_default();
         let mut bundle_writer = bundle_scratch.writer();
         for entity_reference in self.entity_references.iter().copied() {
@@ -319,6 +322,30 @@ impl ResolvedScene {
         };
 
         Ok(())
+    }
+
+    /// Resolves [`RelationshipBehavior`] from this scene's templates, if present.
+    fn relationship_behavior_from_scene(
+        &self,
+        context: &mut TemplateContext,
+    ) -> Option<RelationshipBehavior> {
+        if let Some(behavior) = self.direct_component_template::<RelationshipBehavior>() {
+            return Some(behavior);
+        }
+
+        type BehaviorTemplate = <RelationshipBehavior as FromTemplate>::Template;
+        let index = self
+            .template_indices
+            .get(&TypeId::of::<BehaviorTemplate>())?;
+        let template = self.component_templates.get(*index)?.as_ref();
+        let behavior_template = (template as &dyn Any).downcast_ref::<BehaviorTemplate>()?;
+        behavior_template.build_template(context).ok()
+    }
+
+    fn direct_component_template<C: Component + Copy>(&self) -> Option<C> {
+        let index = self.template_indices.get(&TypeId::of::<C>())?;
+        let template = self.component_templates.get(*index)?.as_ref();
+        (template as &dyn Any).downcast_ref::<C>().copied()
     }
 
     fn insert_relationship_targets(
