@@ -1,4 +1,4 @@
-use crate::{CachedSceneError, ResolvedScene, SceneList, ScenePatch};
+use crate::{CachedSceneError, RelationshipBehavior, ResolvedScene, SceneList, ScenePatch};
 use bevy_asset::{Asset, AssetPath, AssetServer, Assets};
 use bevy_ecs::{
     bundle::Bundle,
@@ -10,7 +10,7 @@ use bevy_ecs::{
     system::IntoObserverSystem,
     template::{FnTemplate, FromTemplate, SceneEntityReference, Template, TemplateContext},
 };
-use core::{any::TypeId, marker::PhantomData};
+use core::{any::{Any, TypeId}, marker::PhantomData};
 use thiserror::Error;
 use variadics_please::all_tuples;
 
@@ -344,6 +344,13 @@ impl<
     ) -> Result<(), ResolveSceneError> {
         let template = scene.get_or_insert_template::<T>(context);
         (self.0)(template, context);
+        if TypeId::of::<T>() == TypeId::of::<RelationshipBehavior>() {
+            scene.relationship_behavior = Some(
+                *(&*template as &dyn Any)
+                    .downcast_ref::<RelationshipBehavior>()
+                    .unwrap(),
+            );
+        }
         Ok(())
     }
 }
