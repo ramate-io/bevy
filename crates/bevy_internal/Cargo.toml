@@ -75,6 +75,11 @@ raw_vulkan_init = ["bevy_render/raw_vulkan_init"]
 
 # Pre-populate buffer labels with buffer types for debugging.
 type_label_buffers = ["bevy_render/type_label_buffers"]
+native_binned_dirty_uploads = ["bevy_render?/native_binned_dirty_uploads"]
+native_binned_dirty_upload_diagnostics = [
+  "native_binned_dirty_uploads",
+  "bevy_render?/native_binned_dirty_upload_diagnostics",
+]
 
 # Include tonemapping LUT KTX2 files.
 tonemapping_luts = [

@@ -5,6 +5,8 @@ use crate::render_resource::{
 };
 use crate::renderer::wgpu_wrapper;
 use bevy_ecs::resource::Resource;
+#[cfg(feature = "native_binned_dirty_uploads")]
+use bevy_platform::sync::Arc;
 use wgpu::{
     util::DeviceExt, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BufferAsyncError, BufferBindingType, PollError, PollStatus,
@@ -19,6 +21,10 @@ wgpu_wrapper! {
 #[derive(Resource, Clone)]
 pub struct RenderDevice {
     device: WgpuDevice,
+    // wgpu's native device IDs are only unique within an Instance. Keep a
+    // clone-stable owner identity for retained uploads across Instance resets.
+    #[cfg(feature = "native_binned_dirty_uploads")]
+    retained_upload_identity: Arc<()>,
 }
 
 impl From<wgpu::Device> for RenderDevice {
@@ -31,7 +37,19 @@ impl RenderDevice {
     pub fn new(device: wgpu::Device) -> Self {
         Self {
             device: WgpuDevice::new(device),
+            #[cfg(feature = "native_binned_dirty_uploads")]
+            retained_upload_identity: Arc::new(()),
         }
+    }
+
+    // A new RenderDevice wrapper conservatively invalidates retained uploads,
+    // even when it wraps a clone of the same underlying wgpu device.
+    #[cfg(feature = "native_binned_dirty_uploads")]
+    pub(crate) fn same_render_device(&self, other: &Self) -> bool {
+        Arc::ptr_eq(
+            &self.retained_upload_identity,
+            &other.retained_upload_identity,
+        )
     }
 
     /// List all [`Features`](wgpu::Features) that may be used with this device.

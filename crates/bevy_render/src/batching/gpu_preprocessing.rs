@@ -1,5 +1,9 @@
 //! Batching functionality when GPU preprocessing is in use.
 
+#[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+#[path = "binned_upload_diagnostics.rs"]
+mod binned_upload_diagnostics;
+
 use alloc::sync::Arc;
 use core::{
     any::TypeId,
@@ -2838,6 +2842,11 @@ pub fn write_batched_instance_buffers<GFBD>(
 /// The bin data consists of the IDs of the mesh instances, as well as the
 /// metadata needed for the `unpack_bins` shader to unpack them.
 pub fn write_binned_instance_buffers<BPI, GFBD>(
+    #[cfg(feature = "native_binned_dirty_upload_diagnostics")] frame_count: Res<
+        bevy_diagnostic::FrameCount,
+    >,
+    #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+    mut diagnostic_cadence: bevy_ecs::system::Local<(u32, Option<u32>)>,
     mut views: Query<&ExtractedView>,
     mut view_binned_render_phases: ResMut<ViewBinnedRenderPhases<BPI>>,
     bin_unpacking_buffers: ResMut<SceneUnpackingBuffers>,
@@ -2847,6 +2856,12 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
     BPI: BinnedPhaseItem,
     GFBD: GetFullBatchData,
 {
+    #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+    let mut diagnostic = binned_upload_diagnostics::Census::begin(
+        frame_count.0,
+        core::any::type_name::<BPI>(),
+        &mut diagnostic_cadence,
+    );
     let bin_unpacking_buffers = bin_unpacking_buffers.into_inner();
 
     let phase_type_id = TypeId::of::<BPI>();
@@ -2856,6 +2871,10 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
     let mut all_seen_view_entities = HashSet::new();
 
     for extracted_view in &mut views {
+        #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+        if let Some(census) = diagnostic.as_mut() {
+            census.views += 1;
+        }
         all_seen_view_entities.insert(extracted_view.retained_view_entity);
 
         let Some(view_binned_render_phase) =
@@ -2864,11 +2883,20 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
             continue;
         };
 
+        #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+        if let Some(census) = diagnostic.as_mut() {
+            census.candidate_sets += view_binned_render_phase.multidrawable_meshes.len();
+        }
+
         // Since we currently only perform GPU-side bin unpacking for multidrawn
         // batch sets, we bail out for all other types of batch sets.
         let BinnedRenderPhaseBatchSets::MultidrawIndirect(ref batch_sets) =
             view_binned_render_phase.batch_sets
         else {
+            #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+            if let Some(census) = diagnostic.as_mut() {
+                census.skipped_mode_sets += view_binned_render_phase.multidrawable_meshes.len();
+            }
             continue;
         };
 
@@ -2933,14 +2961,26 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
         // up in earlier phases.
         for (batch_set_key, batch_set) in view_binned_render_phase.multidrawable_meshes.iter_mut() {
             let Some(representative_entity) = batch_set.representative_entity() else {
+                #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+                if let Some(census) = diagnostic.as_mut() {
+                    census.skipped_no_representative += 1;
+                }
                 continue;
             };
             let Some(scene_unpacking_metadata) =
                 representative_entity_to_batch_set_scene_unpacking_metadata
                     .get(&representative_entity)
             else {
+                #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+                if let Some(census) = diagnostic.as_mut() {
+                    census.skipped_no_metadata += 1;
+                }
                 continue;
             };
+            #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+            if let Some(census) = diagnostic.as_mut() {
+                census.eligible_sets += 1;
+            }
 
             // Write the various buffers to the GPU.
 
@@ -2960,6 +3000,16 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
                 .gpu_buffers
                 .bin_index_to_bin_metadata_index_buffer
                 .write_buffer(&render_device, &render_queue);
+            #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+            if let Some(census) = diagnostic.as_mut() {
+                census.record(0, &batch_set.gpu_buffers.render_binned_mesh_instance_buffer);
+                census.record(1, &batch_set.gpu_buffers.bin_metadata_buffer);
+                census.record(
+                    2,
+                    &batch_set.gpu_buffers.bin_index_to_bin_metadata_index_buffer,
+                );
+                census.fan_write_calls += 1;
+            }
 
             let (
                 Some(render_bin_entry_buffer),
@@ -2979,6 +3029,10 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
                     .buffer(),
             )
             else {
+                #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+                if let Some(census) = diagnostic.as_mut() {
+                    census.skipped_missing_buffers += 1;
+                }
                 continue;
             };
 
@@ -3021,6 +3075,10 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
                 NonMaxU32::new(gpu_uniform_allocation_metadata_index as u32),
             )
             else {
+                #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+                if let Some(census) = diagnostic.as_mut() {
+                    census.skipped_index_overflow += 1;
+                }
                 continue;
             };
 
@@ -3045,10 +3103,18 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
                 view_phase_bin_unpacking_buffers
                     .indexed_unpacking_jobs
                     .push(job);
+                #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+                if let Some(census) = diagnostic.as_mut() {
+                    census.indexed_jobs += 1;
+                }
             } else {
                 view_phase_bin_unpacking_buffers
                     .non_indexed_unpacking_jobs
                     .push(job);
+                #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+                if let Some(census) = diagnostic.as_mut() {
+                    census.non_indexed_jobs += 1;
+                }
             }
         }
     }
@@ -3060,6 +3126,10 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
             bin_unpacking_buffers_key.phase != phase_type_id
                 || all_seen_view_entities.contains(&bin_unpacking_buffers_key.view)
         });
+    #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+    if let Some(census) = diagnostic {
+        census.finish();
+    }
 }
 
 /// Clears out the [`SceneUnpackingBuffers`] in preparation for a new frame.
