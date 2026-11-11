@@ -444,7 +444,10 @@ type_label_buffers = ["bevy_internal/type_label_buffers"]
 native_binned_dirty_uploads = ["bevy_internal/native_binned_dirty_uploads"]
 
 # Independently validates skipped binned-input bytes; expensive, for diagnostics only.
-native_binned_dirty_upload_diagnostics = ["native_binned_dirty_uploads", "bevy_internal/native_binned_dirty_upload_diagnostics"]
+native_binned_dirty_upload_diagnostics = [
+  "native_binned_dirty_uploads",
+  "bevy_internal/native_binned_dirty_upload_diagnostics",
+]
 
 # Tracing support, saving a file in Chrome Tracing format
 trace_chrome = ["trace", "bevy_internal/trace_chrome", "debug"]

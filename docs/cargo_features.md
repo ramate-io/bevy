@@ -161,6 +161,8 @@ This is the complete `bevy` cargo feature list, without "profiles" or "collectio
 |mp3|MP3 audio format support (through `symphonia`)|
 |mp4|MP4 audio format support (through `symphonia`). It also enables AAC support.|
 |multi_threaded|Enables multithreaded parallelism in the engine. Disabling it forces all engine tasks to run on a single thread.|
+|native_binned_dirty_upload_diagnostics|Independently validates skipped binned-input bytes; expensive, for diagnostics only.|
+|native_binned_dirty_uploads|Enables the fork's opt-in retained binned-input upload policy.|
 |pan_camera|Enables the pan camera from bevy_camera_controller|
 |pan_orbit_camera|Enables the pan orbit camera from bevy_camera_controller|
 |pan_orbit_gizmo|Enables the pan orbit camera anchor indicator gizmo|
