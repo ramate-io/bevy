@@ -7,7 +7,7 @@ use bytemuck::NoUninit;
 use wgpu::BufferUsages;
 
 use crate::{
-    render_resource::{BufferId, RawBufferVec},
+    render_resource::{Buffer, BufferId, RawBufferVec},
     renderer::{RenderDevice, RenderQueue},
 };
 
@@ -122,7 +122,7 @@ impl<T: NoUninit> BinnedInputBuffer<T> {
         }
         self.prepare_device(device);
         self.raw.reserve(self.raw.len(), device);
-        let destination = self.raw.buffer().map(|buffer| buffer.id());
+        let destination = self.raw.buffer().map(Buffer::id);
         if !self.state.needs_upload(destination, self.raw.len()) {
             #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
             {
@@ -179,7 +179,7 @@ impl<T: NoUninit> BinnedInputBuffer<T> {
                     .matches(bytemuck::cast_slice(self.raw.values()));
         }
         self.raw.write_buffer(device, queue);
-        let destination = self.raw.buffer().map(|buffer| buffer.id());
+        let destination = self.raw.buffer().map(Buffer::id);
         let queued = !self.raw.is_empty() && destination.is_some();
         #[cfg(any(test, feature = "native_binned_dirty_upload_diagnostics"))]
         {

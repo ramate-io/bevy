@@ -1,5 +1,8 @@
 use super::{BinnedInputBuffer, UploadMode, UploadState};
-use crate::{render_resource::BufferId, test_utils::create_dummy_device};
+use crate::{
+    render_resource::{Buffer, BufferId},
+    test_utils::create_dummy_device,
+};
 use wgpu::BufferUsages;
 
 fn acknowledge(buffer: &mut BinnedInputBuffer<u32>, id: BufferId) {
@@ -119,18 +122,18 @@ fn noop_device_label_growth_replacement_and_empty_refill_force_writes() {
     buffer.set_label(Some("initial"));
     buffer.push(10u32);
     buffer.write_buffer(&device, &queue);
-    let initial = buffer.buffer().map(|buffer| buffer.id());
+    let initial = buffer.buffer().map(Buffer::id);
     assert!(initial.is_some());
     buffer.set_label(Some("replacement"));
     buffer.write_buffer(&device, &queue);
     assert!(buffer.last_write.queued);
-    assert_ne!(buffer.buffer().map(|buffer| buffer.id()), initial);
-    let labeled = buffer.buffer().map(|buffer| buffer.id());
+    assert_ne!(buffer.buffer().map(Buffer::id), initial);
+    let labeled = buffer.buffer().map(Buffer::id);
     buffer.push(20);
     buffer.write_buffer(&device, &queue);
     assert!(buffer.last_write.queued);
-    assert_ne!(buffer.buffer().map(|buffer| buffer.id()), labeled);
-    let grown = buffer.buffer().map(|buffer| buffer.id());
+    assert_ne!(buffer.buffer().map(Buffer::id), labeled);
+    let grown = buffer.buffer().map(Buffer::id);
     buffer.values_mut().clear();
     buffer.write_buffer(&device, &queue);
     assert!(!buffer.last_write.queued);
@@ -139,26 +142,26 @@ fn noop_device_label_growth_replacement_and_empty_refill_force_writes() {
     buffer.values_mut().extend([30, 40]);
     buffer.write_buffer(&device, &queue);
     assert!(buffer.last_write.queued);
-    assert_eq!(buffer.buffer().map(|buffer| buffer.id()), grown);
+    assert_eq!(buffer.buffer().map(Buffer::id), grown);
 
     let cloned_device = device.clone();
     assert!(device.same_render_device(&cloned_device));
     buffer.write_buffer(&cloned_device, &queue);
     assert!(buffer.last_write.skipped);
-    assert_eq!(buffer.buffer().map(|buffer| buffer.id()), grown);
+    assert_eq!(buffer.buffer().map(Buffer::id), grown);
 
     let rewrapped_device = crate::renderer::RenderDevice::from(device.wgpu_device().clone());
     assert!(!device.same_render_device(&rewrapped_device));
     buffer.write_buffer(&rewrapped_device, &queue);
     assert!(buffer.last_write.queued);
-    let rewrapped = buffer.buffer().map(|buffer| buffer.id());
+    let rewrapped = buffer.buffer().map(Buffer::id);
     assert_ne!(rewrapped, grown);
 
     let (replacement_device, replacement_queue) = create_dummy_device();
     assert!(!device.same_render_device(&replacement_device));
     buffer.write_buffer(&replacement_device, &replacement_queue);
     assert!(buffer.last_write.queued);
-    assert_ne!(buffer.buffer().map(|buffer| buffer.id()), rewrapped);
+    assert_ne!(buffer.buffer().map(Buffer::id), rewrapped);
     assert_eq!(buffer.values(), &[30, 40]);
     assert_eq!(buffer.get_label(), Some("replacement"));
     assert!(buffer.buffer().is_some_and(|buffer| buffer
@@ -264,7 +267,7 @@ fn metal_independent_instances_reupload_and_read_back_current_bytes(
     input.values_mut().extend([30u32, 40]);
     input.write_buffer(&device, &queue);
     check_metal_readback(&input, &device, &queue)?;
-    let original = input.buffer().map(|buffer| buffer.id());
+    let original = input.buffer().map(Buffer::id);
     let (replacement, replacement_queue) = create_metal_device()?;
     eprintln!(
         "independent_metal_wgpu_devices_equal={}",
@@ -275,7 +278,7 @@ fn metal_independent_instances_reupload_and_read_back_current_bytes(
         input.last_write.queued,
         "new instance/device must receive a full upload"
     );
-    assert_ne!(input.buffer().map(|buffer| buffer.id()), original);
+    assert_ne!(input.buffer().map(Buffer::id), original);
     check_metal_readback(&input, &replacement, &replacement_queue)?;
     Ok(())
 }

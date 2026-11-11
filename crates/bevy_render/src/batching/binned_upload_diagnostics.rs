@@ -30,7 +30,7 @@ impl Config {
     }
 
     fn select(&self, frame: u32, cadence: &mut (u32, Option<u32>)) -> Sample {
-        if !self.enabled || frame % self.sample_frames != 0 || cadence.1 == Some(frame) {
+        if !self.enabled || !frame.is_multiple_of(self.sample_frames) || cadence.1 == Some(frame) {
             return Sample::Skip;
         }
         cadence.1 = Some(frame);
