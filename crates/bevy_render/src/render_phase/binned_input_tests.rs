@@ -269,10 +269,6 @@ fn metal_independent_instances_reupload_and_read_back_current_bytes(
     check_metal_readback(&input, &device, &queue)?;
     let original = input.buffer().map(Buffer::id);
     let (replacement, replacement_queue) = create_metal_device()?;
-    eprintln!(
-        "independent_metal_wgpu_devices_equal={}",
-        device.wgpu_device() == replacement.wgpu_device()
-    );
     input.write_buffer(&replacement, &replacement_queue);
     assert!(
         input.last_write.queued,
