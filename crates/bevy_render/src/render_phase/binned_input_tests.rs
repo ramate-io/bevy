@@ -141,10 +141,24 @@ fn noop_device_label_growth_replacement_and_empty_refill_force_writes() {
     assert!(buffer.last_write.queued);
     assert_eq!(buffer.buffer().map(|buffer| buffer.id()), grown);
 
+    let cloned_device = device.clone();
+    assert!(device.same_render_device(&cloned_device));
+    buffer.write_buffer(&cloned_device, &queue);
+    assert!(buffer.last_write.skipped);
+    assert_eq!(buffer.buffer().map(|buffer| buffer.id()), grown);
+
+    let rewrapped_device = crate::renderer::RenderDevice::from(device.wgpu_device().clone());
+    assert!(!device.same_render_device(&rewrapped_device));
+    buffer.write_buffer(&rewrapped_device, &queue);
+    assert!(buffer.last_write.queued);
+    let rewrapped = buffer.buffer().map(|buffer| buffer.id());
+    assert_ne!(rewrapped, grown);
+
     let (replacement_device, replacement_queue) = create_dummy_device();
+    assert!(!device.same_render_device(&replacement_device));
     buffer.write_buffer(&replacement_device, &replacement_queue);
     assert!(buffer.last_write.queued);
-    assert_ne!(buffer.buffer().map(|buffer| buffer.id()), grown);
+    assert_ne!(buffer.buffer().map(|buffer| buffer.id()), rewrapped);
     assert_eq!(buffer.values(), &[30, 40]);
     assert_eq!(buffer.get_label(), Some("replacement"));
     assert!(buffer.buffer().is_some_and(|buffer| buffer
@@ -175,4 +189,93 @@ fn independent_shadow_checks_every_skip_and_fails_closed_on_mismatch() {
     buffer.write_buffer(&device, &queue);
     assert!(buffer.last_write.shadow_checked && !buffer.last_write.shadow_mismatch);
     assert!(buffer.last_write.skipped);
+}
+
+fn create_metal_device(
+) -> Result<(crate::renderer::RenderDevice, crate::renderer::RenderQueue), Box<dyn std::error::Error>>
+{
+    use bevy_platform::future::block_on;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::METAL,
+        flags: wgpu::InstanceFlags::default(),
+        memory_budget_thresholds: Default::default(),
+        display: None,
+        backend_options: Default::default(),
+    });
+    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
+    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: adapter.limits(),
+        ..Default::default()
+    }))?;
+    Ok((device.into(), crate::renderer::RenderQueue::new(queue)))
+}
+
+fn check_metal_readback(
+    input: &BinnedInputBuffer<u32>,
+    device: &crate::renderer::RenderDevice,
+    queue: &crate::renderer::RenderQueue,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let size = (input.len() * size_of::<u32>()) as u64;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("binned input test readback"),
+        size,
+        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let source = input
+        .buffer()
+        .ok_or_else(|| std::io::Error::other("missing uploaded buffer"))?;
+    let scope = device
+        .wgpu_device()
+        .push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_buffer_to_buffer(source, 0, &staging, 0, size);
+    let submitted = queue.submit([encoder.finish()]);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    staging
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+    device.poll(wgpu::PollType::Wait {
+        submission_index: Some(submitted),
+        timeout: Some(std::time::Duration::from_secs(10)),
+    })?;
+    receiver.recv_timeout(std::time::Duration::from_secs(1))??;
+    if let Some(error) = bevy_platform::future::block_on(scope.pop()) {
+        return Err(error.into());
+    }
+    let bytes = staging.slice(..).get_mapped_range()?;
+    assert_eq!(&*bytes, bytemuck::cast_slice::<u32, u8>(input.values()));
+    drop(bytes);
+    staging.unmap();
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a Metal GPU; run explicitly for device replacement validation"]
+fn metal_independent_instances_reupload_and_read_back_current_bytes(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (device, queue) = create_metal_device()?;
+    let mut input = BinnedInputBuffer::with_mode(
+        BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+        UploadMode::Dirty,
+    );
+    input.values_mut().extend([30u32, 40]);
+    input.write_buffer(&device, &queue);
+    check_metal_readback(&input, &device, &queue)?;
+    let original = input.buffer().map(|buffer| buffer.id());
+    let (replacement, replacement_queue) = create_metal_device()?;
+    eprintln!(
+        "independent_metal_wgpu_devices_equal={}",
+        device.wgpu_device() == replacement.wgpu_device()
+    );
+    input.write_buffer(&replacement, &replacement_queue);
+    assert!(
+        input.last_write.queued,
+        "new instance/device must receive a full upload"
+    );
+    assert_ne!(input.buffer().map(|buffer| buffer.id()), original);
+    check_metal_readback(&input, &replacement, &replacement_queue)?;
+    Ok(())
 }

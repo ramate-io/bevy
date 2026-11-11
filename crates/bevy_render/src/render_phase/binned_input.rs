@@ -153,7 +153,7 @@ impl<T: NoUninit> BinnedInputBuffer<T> {
         if self
             .device
             .as_ref()
-            .is_some_and(|previous| previous.wgpu_device() != device.wgpu_device())
+            .is_some_and(|previous| !previous.same_render_device(device))
         {
             self.state.invalidate_destination();
             let mut replacement = RawBufferVec::new(self.usage);
@@ -164,7 +164,7 @@ impl<T: NoUninit> BinnedInputBuffer<T> {
         if self
             .device
             .as_ref()
-            .is_none_or(|previous| previous.wgpu_device() != device.wgpu_device())
+            .is_none_or(|previous| !previous.same_render_device(device))
         {
             self.device = Some(device.clone());
         }
@@ -209,12 +209,15 @@ pub struct BinnedInputUploadOutcome {
     /// A nonempty full CPU queue write returned from its Rust API.
     pub queued: bool,
     /// Diagnostic bytes were equal despite a conservative dirty indication.
+    #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
     pub queued_equal: bool,
     /// An unchanged nonempty destination was retained without a queue write.
     pub skipped: bool,
     /// Independent last-submitted bytes were checked on this would-skip path.
+    #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
     pub shadow_checked: bool,
     /// Independent bytes differed. An error was logged and a full write forced.
+    #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
     pub shadow_mismatch: bool,
 }
 
