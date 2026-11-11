@@ -47,7 +47,7 @@ use crate::batching::gpu_preprocessing::{
     GpuBinMetadata, GpuPreprocessingMode, GpuPreprocessingSupport, PhaseBatchedInstanceBuffers,
     PhaseIndirectParametersBuffers,
 };
-use crate::render_resource::{RawBufferVec, UninitBufferVec};
+use crate::render_resource::UninitBufferVec;
 use crate::renderer::RenderDevice;
 use crate::sync_world::{MainEntity, MainEntityHashMap};
 use crate::view::{ExtractedView, RetainedViewEntity};
@@ -81,6 +81,15 @@ use core::{
     ops::{Range, RangeBounds},
 };
 use smallvec::SmallVec;
+
+#[cfg(feature = "native_binned_dirty_uploads")]
+mod binned_input;
+#[cfg(not(feature = "native_binned_dirty_uploads"))]
+use crate::render_resource::RawBufferVec as BinnedInputBuffer;
+#[cfg(feature = "native_binned_dirty_uploads")]
+pub use binned_input::BinnedInputBuffer;
+#[cfg(feature = "native_binned_dirty_upload_diagnostics")]
+pub use binned_input::BinnedInputUploadOutcome;
 
 /// Stores the rendering instructions for a single phase that uses bins in all
 /// views.
@@ -228,17 +237,17 @@ pub struct RenderMultidrawableBatchSetGpuBuffers {
     /// A mapping from each binned mesh instance
     /// (`RenderBinnedMeshInstanceIndex`) to its input uniform index
     /// ([`InputUniformIndex`]) and bin index (`RenderBinIndex`).
-    pub render_binned_mesh_instance_buffer: RawBufferVec<GpuRenderBinnedMeshInstance>,
+    pub render_binned_mesh_instance_buffer: BinnedInputBuffer<GpuRenderBinnedMeshInstance>,
 
     /// A mapping from each `RenderBinMetadataIndex` to the offset of its indirect draw
     /// parameters.
-    pub bin_metadata_buffer: RawBufferVec<GpuBinMetadata>,
+    pub bin_metadata_buffer: BinnedInputBuffer<GpuBinMetadata>,
 
     /// A mapping from each `RenderBinIndex` to the associated bin metadata
     /// index.
     ///
     /// This array isn't necessarily tightly packed (i.e. it can have holes).
-    pub bin_index_to_bin_metadata_index_buffer: RawBufferVec<u32>,
+    pub bin_index_to_bin_metadata_index_buffer: BinnedInputBuffer<u32>,
 
     /// A temporary buffer used to store intermediate sums during the uniform
     /// allocation phase.
@@ -248,11 +257,12 @@ pub struct RenderMultidrawableBatchSetGpuBuffers {
 impl RenderMultidrawableBatchSetGpuBuffers {
     /// Creates a new set of GPU buffers for a multidrawable batch set.
     fn new() -> RenderMultidrawableBatchSetGpuBuffers {
-        let mut render_bin_entry_buffer = RawBufferVec::new(BufferUsages::STORAGE);
+        let mut render_bin_entry_buffer = BinnedInputBuffer::new(BufferUsages::STORAGE);
         render_bin_entry_buffer.set_label(Some("render bin entry buffer"));
-        let mut bin_metadata_buffer = RawBufferVec::new(BufferUsages::STORAGE);
+        let mut bin_metadata_buffer = BinnedInputBuffer::new(BufferUsages::STORAGE);
         bin_metadata_buffer.set_label(Some("bin metadata buffer"));
-        let mut bin_index_to_bin_metadata_index_buffer = RawBufferVec::new(BufferUsages::STORAGE);
+        let mut bin_index_to_bin_metadata_index_buffer =
+            BinnedInputBuffer::new(BufferUsages::STORAGE);
         bin_index_to_bin_metadata_index_buffer
             .set_label(Some("bin-index-to-bin-metadata-index buffer"));
         let mut fan_buffer = UninitBufferVec::new(BufferUsages::STORAGE);

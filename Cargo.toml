@@ -440,6 +440,12 @@ raw_vulkan_init = ["bevy_internal/raw_vulkan_init"]
 # Pre-populate buffer labels with buffer types for debugging.
 type_label_buffers = ["bevy_internal/type_label_buffers"]
 
+# Enables the fork's opt-in retained binned-input upload policy.
+native_binned_dirty_uploads = ["bevy_internal/native_binned_dirty_uploads"]
+
+# Independently validates skipped binned-input bytes; expensive, for diagnostics only.
+native_binned_dirty_upload_diagnostics = ["native_binned_dirty_uploads", "bevy_internal/native_binned_dirty_upload_diagnostics"]
+
 # Tracing support, saving a file in Chrome Tracing format
 trace_chrome = ["trace", "bevy_internal/trace_chrome", "debug"]
 
