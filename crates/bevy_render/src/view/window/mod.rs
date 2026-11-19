@@ -50,6 +50,14 @@ impl Plugin for WindowRenderPlugin {
         }
 
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            #[cfg(not(target_os = "macos"))]
+            let prepare_windows_system = prepare_windows.in_set(RenderSystems::PrepareViews);
+            // Drawable acquisition can block. Keep it on the render schedule's caller so a
+            // main-world system cannot pick it up while driving the shared task pool.
+            #[cfg(target_os = "macos")]
+            let prepare_windows_system =
+                run_on_render_owner(prepare_windows).in_set(RenderSystems::PrepareViews);
+
             render_app
                 .add_systems(ExtractSchedule, extract_windows.before(extract_cameras))
                 .add_systems(
@@ -58,9 +66,18 @@ impl Plugin for WindowRenderPlugin {
                         .run_if(need_surface_configuration)
                         .before(prepare_windows),
                 )
-                .add_systems(Render, prepare_windows.in_set(RenderSystems::PrepareViews));
+                .add_systems(Render, prepare_windows_system);
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn run_on_render_owner<M>(system: impl IntoSystem<(), (), M>) -> impl System<In = (), Out = ()> {
+    // The no-op makes the whole pipe exclusive so it runs on the render schedule's caller.
+    // Piping retains the original system type set used by the ordering constraints.
+    fn barrier(_: In<()>, _: &mut World) {}
+
+    IntoSystem::into_system(system.pipe(barrier).with_first_name())
 }
 
 #[derive(Component)]
@@ -510,4 +527,68 @@ fn present_mode(window: &ExtractedWindow, caps: &wgpu::SurfaceCapabilities) -> w
         info!("PresentMode {present_mode:?} requested but not available. Falling back to {new_present_mode:?}");
     }
     new_present_mode
+}
+
+#[cfg(all(test, target_os = "macos", feature = "multi_threaded"))]
+mod tests {
+    use super::*;
+    use bevy_ecs::{schedule::MultiThreadedExecutor, system::RunSystemError};
+    use std::thread::{self, ThreadId};
+
+    #[derive(Resource)]
+    struct AcquireOrder {
+        caller: ThreadId,
+        step: u8,
+    }
+
+    #[test]
+    fn render_owner_preserves_surface_order_and_runs_on_schedule_caller() {
+        fn setup_surface(order: Res<AcquireOrder>, mut commands: Commands) {
+            commands.insert_resource(AcquireOrder {
+                caller: order.caller,
+                step: 1,
+            });
+        }
+
+        fn acquire_surface(mut order: ResMut<AcquireOrder>) {
+            assert_eq!(thread::current().id(), order.caller);
+            assert_eq!(order.step, 1);
+            order.step = 2;
+        }
+
+        fn prepare_view(mut order: ResMut<AcquireOrder>) {
+            assert_eq!(order.step, 2);
+            order.step = 3;
+        }
+
+        let mut schedule = Schedule::default();
+        schedule.set_executor(MultiThreadedExecutor::new());
+        schedule.add_systems((
+            prepare_view.after(acquire_surface),
+            run_on_render_owner(acquire_surface),
+            setup_surface.before(acquire_surface),
+        ));
+        let mut world = World::new();
+        world.insert_resource(AcquireOrder {
+            caller: thread::current().id(),
+            step: 0,
+        });
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<AcquireOrder>().step, 3);
+    }
+
+    #[test]
+    fn render_owner_preserves_first_system_error() {
+        fn acquire_surface() -> bevy_ecs::error::Result {
+            Err("surface acquisition failed".into())
+        }
+
+        let mut world = World::new();
+        let mut system = run_on_render_owner(acquire_surface);
+        system.initialize(&mut world);
+        assert!(matches!(
+            system.run((), &mut world),
+            Err(RunSystemError::Failed(error)) if error.to_string().lines().next() == Some("surface acquisition failed")
+        ));
+    }
 }
