@@ -81,6 +81,11 @@ use crate::{
 
 use super::{ShadowView, ViewLightEntities};
 
+mod retained_job_bind_groups;
+
+pub use retained_job_bind_groups::RetainedJobBindGroupCache;
+use retained_job_bind_groups::{JobBindGroupRecipe, JobBufferBinding};
+
 /// The GPU workgroup size.
 const WORKGROUP_SIZE: usize = 64;
 
@@ -514,6 +519,7 @@ impl Plugin for GpuMeshPreprocessPlugin {
         render_app
             .init_gpu_resource::<BinUnpackingBindGroups>()
             .init_gpu_resource::<UniformAllocationBindGroups>()
+            .init_gpu_resource::<RetainedJobBindGroupCache>()
             .init_gpu_resource::<PreprocessPipelines>()
             .init_gpu_resource::<SpecializedComputePipelines<PreprocessPipeline>>()
             .init_gpu_resource::<SpecializedComputePipelines<ResetIndirectBatchSetsPipeline>>()
@@ -2200,9 +2206,18 @@ pub fn prepare_preprocess_bind_groups(
     view_uniforms: Res<ViewUniforms>,
     previous_view_uniforms: Res<PreviousViewUniforms>,
     pipelines: Res<PreprocessPipelines>,
-    mut bin_unpacking_bind_groups: ResMut<BinUnpackingBindGroups>,
-    mut uniform_allocation_bind_groups: ResMut<UniformAllocationBindGroups>,
+    (mut bin_unpacking_bind_groups, mut uniform_allocation_bind_groups, mut job_bind_group_cache): (
+        ResMut<BinUnpackingBindGroups>,
+        ResMut<UniformAllocationBindGroups>,
+        ResMut<RetainedJobBindGroupCache>,
+    ),
+    #[cfg(feature = "trace")] frame_count: Res<bevy_diagnostic::FrameCount>,
 ) {
+    #[cfg(feature = "trace")]
+    let _sample_span = job_bind_group_cache
+        .begin_sample(frame_count.0)
+        .then(|| bevy_log::info_span!("sample_preprocess_job_bind_groups").entered());
+
     // Grab the `BatchedInstanceBuffers`.
     let BatchedInstanceBuffers {
         current_input_buffer: current_input_buffer_vec,
@@ -2214,6 +2229,7 @@ pub fn prepare_preprocess_bind_groups(
         current_input_buffer_vec.buffer().buffer(),
         previous_input_buffer_vec.buffer(),
     ) else {
+        job_bind_group_cache.finish_frame();
         return;
     };
 
@@ -2334,12 +2350,18 @@ pub fn prepare_preprocess_bind_groups(
 
     // Create the bind groups we'll need for each dispatch of the bin unpacking
     // (`unpack_bins`) and uniform allocation (`allocate_uniforms`) shaders.
+    #[cfg(feature = "trace")]
+    let _job_bind_groups_span = bevy_log::info_span!("prepare_bin_job_bind_groups").entered();
+    let mut job_bind_groups = JobBindGroupBuilder {
+        cache: &mut job_bind_group_cache,
+        device: &render_device,
+        pipeline_cache: &pipeline_cache,
+        pipelines: &pipelines,
+    };
     for (_, view) in &views {
         create_bin_unpacking_bind_groups(
             &mut bin_unpacking_bind_groups,
-            &render_device,
-            &pipeline_cache,
-            &pipelines,
+            &mut job_bind_groups,
             &indirect_parameters_buffers,
             phase_instance_buffers,
             &scene_unpacking_buffers,
@@ -2347,14 +2369,13 @@ pub fn prepare_preprocess_bind_groups(
         );
         create_uniform_allocation_bind_groups(
             &mut uniform_allocation_bind_groups,
-            &render_device,
-            &pipeline_cache,
-            &pipelines,
+            &mut job_bind_groups,
             &indirect_parameters_buffers,
             &scene_unpacking_buffers,
             &view.retained_view_entity,
         );
     }
+    job_bind_group_cache.finish_frame();
 }
 
 /// A temporary structure that stores all the information needed to construct
@@ -3305,13 +3326,19 @@ fn create_build_indirect_parameters_bind_groups(
     commands.insert_resource(build_indirect_parameters_bind_groups);
 }
 
+/// Inputs shared by the two per-job bind group families.
+struct JobBindGroupBuilder<'a> {
+    cache: &'a mut RetainedJobBindGroupCache,
+    device: &'a RenderDevice,
+    pipeline_cache: &'a PipelineCache,
+    pipelines: &'a PreprocessPipelines,
+}
+
 /// Creates all bind groups needed to run the `unpack_bins` shader for all the
 /// phases for a single view.
 fn create_bin_unpacking_bind_groups(
     bin_unpacking_bind_groups: &mut BinUnpackingBindGroups,
-    render_device: &RenderDevice,
-    pipeline_cache: &PipelineCache,
-    preprocess_pipelines: &PreprocessPipelines,
+    builder: &mut JobBindGroupBuilder,
     indirect_parameters_buffers: &IndirectParametersBuffers,
     phase_instance_buffers: &TypeIdHashMap<UntypedPhaseBatchedInstanceBuffers<MeshUniform>>,
     scene_unpacking_buffers: &SceneUnpackingBuffers,
@@ -3370,9 +3397,7 @@ fn create_bin_unpacking_bind_groups(
                         .iter()
                         .map(|job| {
                             create_bin_unpacking_bind_group(
-                                render_device,
-                                preprocess_pipelines,
-                                pipeline_cache,
+                                builder,
                                 job,
                                 bin_unpacking_metadata_buffer,
                                 indexed_work_item_buffer,
@@ -3388,9 +3413,7 @@ fn create_bin_unpacking_bind_groups(
                         .iter()
                         .map(|job| {
                             create_bin_unpacking_bind_group(
-                                render_device,
-                                preprocess_pipelines,
-                                pipeline_cache,
+                                builder,
                                 job,
                                 bin_unpacking_metadata_buffer,
                                 non_indexed_work_item_buffer,
@@ -3408,47 +3431,34 @@ fn create_bin_unpacking_bind_groups(
 /// Creates a bind group for the bin unpacking shader for a single (view, phase,
 /// mesh indexed-ness) combination.
 fn create_bin_unpacking_bind_group(
-    render_device: &RenderDevice,
-    preprocess_pipelines: &PreprocessPipelines,
-    pipeline_cache: &PipelineCache,
+    builder: &mut JobBindGroupBuilder,
     job: &SceneUnpackingJob,
     bin_unpacking_metadata_buffer: &Buffer,
     work_item_buffer: &Buffer,
     indexed: bool,
 ) -> ViewPhaseBinUnpackingBindGroup {
-    let bind_group = render_device.create_bind_group(
+    let bind_group = builder.cache.get_or_create(
+        builder.device,
         if indexed {
-            "bin unpacking indexed bind group"
+            JobBindGroupRecipe::UnpackIndexed
         } else {
-            "bin unpacking non-indexed bind group"
+            JobBindGroupRecipe::UnpackNonIndexed
         },
-        &pipeline_cache
-            .get_bind_group_layout(&preprocess_pipelines.bin_unpacking.bind_group_layout),
-        &BindGroupEntries::sequential((
-            // @group(0) @binding(0) var<uniform>
-            // bin_unpacking_metadata:
-            // BinUnpackingMetadata;
-            BindingResource::Buffer(BufferBinding {
+        &builder
+            .pipeline_cache
+            .get_bind_group_layout(&builder.pipelines.bin_unpacking.bind_group_layout),
+        [
+            // Bin unpacking metadata for this job.
+            JobBufferBinding {
                 buffer: bin_unpacking_metadata_buffer,
                 offset: job.bin_unpacking_metadata_index.uniform_offset() as u64,
                 size: NonZeroU64::new(size_of::<GpuBinUnpackingMetadata>() as u64),
-            }),
-            // @group(0) @binding(1) var<storage>
-            // binned_mesh_instances:
-            // array<BinnedMeshInstance>;
-            job.render_binned_mesh_instance_buffer.as_entire_binding(),
-            // @group(0) @binding(2) var<storage,
-            // read_write> preprocess_work_items:
-            // array<PreprocessWorkItem>;
-            work_item_buffer.as_entire_binding(),
-            // @group(0) @binding(3) var<storage> bin_metadata:
-            // array<BinMetadata>;
-            job.bin_metadata_buffer.as_entire_binding(),
-            // @group(0) @binding(4) var<storage>
-            // bin_index_to_bin_metadata_index: array<u32>;
-            job.bin_index_to_bin_metadata_index_buffer
-                .as_entire_binding(),
-        )),
+            },
+            JobBufferBinding::entire(&job.render_binned_mesh_instance_buffer),
+            JobBufferBinding::entire(work_item_buffer),
+            JobBufferBinding::entire(&job.bin_metadata_buffer),
+            JobBufferBinding::entire(&job.bin_index_to_bin_metadata_index_buffer),
+        ],
     );
     ViewPhaseBinUnpackingBindGroup {
         metadata_index: job.bin_unpacking_metadata_index,
@@ -3461,9 +3471,7 @@ fn create_bin_unpacking_bind_group(
 /// the phases for a single view.
 fn create_uniform_allocation_bind_groups(
     uniform_allocation_bind_groups: &mut UniformAllocationBindGroups,
-    render_device: &RenderDevice,
-    pipeline_cache: &PipelineCache,
-    preprocess_pipelines: &PreprocessPipelines,
+    builder: &mut JobBindGroupBuilder,
     indirect_parameters_buffers: &IndirectParametersBuffers,
     scene_unpacking_buffers: &SceneUnpackingBuffers,
     view_entity: &RetainedViewEntity,
@@ -3500,9 +3508,7 @@ fn create_uniform_allocation_bind_groups(
                             .iter()
                             .map(|job| {
                                 create_uniform_allocation_bind_group(
-                                    render_device,
-                                    preprocess_pipelines,
-                                    pipeline_cache,
+                                    builder,
                                     job,
                                     uniform_allocation_metadata_buffer,
                                     indexed_indirect_parameters_metadata_buffer,
@@ -3523,9 +3529,7 @@ fn create_uniform_allocation_bind_groups(
                             .iter()
                             .map(|job| {
                                 create_uniform_allocation_bind_group(
-                                    render_device,
-                                    preprocess_pipelines,
-                                    pipeline_cache,
+                                    builder,
                                     job,
                                     uniform_allocation_metadata_buffer,
                                     non_indexed_indirect_parameters_metadata_buffer,
@@ -3543,45 +3547,38 @@ fn create_uniform_allocation_bind_groups(
 /// Creates a bind group for the uniform allocation shader for a single (view,
 /// phase, mesh indexed-ness) combination.
 fn create_uniform_allocation_bind_group(
-    render_device: &RenderDevice,
-    preprocess_pipelines: &PreprocessPipelines,
-    pipeline_cache: &PipelineCache,
+    builder: &mut JobBindGroupBuilder,
     job: &SceneUnpackingJob,
     uniform_allocation_metadata_buffer: &Buffer,
     indirect_parameters_metadata_buffer: &Buffer,
     indexed: bool,
 ) -> ViewPhaseUniformAllocationBindGroup {
-    let bind_group = render_device.create_bind_group(
+    let bind_group = builder.cache.get_or_create(
+        builder.device,
         if indexed {
-            "uniform allocation indexed bind group"
+            JobBindGroupRecipe::AllocateIndexed
         } else {
-            "uniform allocation non-indexed bind group"
+            JobBindGroupRecipe::AllocateNonIndexed
         },
-        &pipeline_cache.get_bind_group_layout(
+        &builder.pipeline_cache.get_bind_group_layout(
             // All the pipelines' bind group layouts should be identical.
-            &preprocess_pipelines
+            &builder
+                .pipelines
                 .uniform_allocation
                 .local_scan
                 .bind_group_layout,
         ),
-        &BindGroupEntries::sequential((
-            // @group(0) @binding(0) var<uniform> allocate_uniforms_metadata:
-            // AllocateUniformsMetadata;
-            BindingResource::Buffer(BufferBinding {
+        [
+            // Uniform allocation metadata for this job.
+            JobBufferBinding {
                 buffer: uniform_allocation_metadata_buffer,
                 offset: job.uniform_allocation_metadata_index.uniform_offset() as u64,
                 size: NonZeroU64::new(size_of::<GpuUniformAllocationMetadata>() as u64),
-            }),
-            // @group(0) @binding(1) var<storage> bin_metadata:
-            // array<BinMetadata>;
-            job.bin_metadata_buffer.as_entire_binding(),
-            // @group(0) @binding(2) var<storage, read_write>
-            // indirect_parameters_metadata: array<IndirectParametersMetadata>;
-            indirect_parameters_metadata_buffer.as_entire_binding(),
-            // @group(0) @binding(3) var<storage, read_write> fan_buffer:
-            // array<u32>;
-            job.fan_buffer.as_entire_binding(),
-        )),
+            },
+            JobBufferBinding::entire(&job.bin_metadata_buffer),
+            JobBufferBinding::entire(indirect_parameters_metadata_buffer),
+            JobBufferBinding::entire(&job.fan_buffer),
+        ],
     );
     ViewPhaseUniformAllocationBindGroup {
         metadata_index: job.uniform_allocation_metadata_index,
