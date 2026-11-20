@@ -133,6 +133,8 @@ unsafe_op_in_unsafe_fn = "warn"
 unused_qualifications = "warn"
 
 [features]
+# Default-off per-pipeline preparation/backend timing; no scheduling changes.
+pipeline_creation_diagnostics = ["bevy_internal/pipeline_creation_diagnostics"]
 default = ["2d", "3d", "ui", "audio"]
 
 # PROFILE: The default 2D Bevy experience. This includes the core Bevy framework, 2D functionality, scenes and picking.

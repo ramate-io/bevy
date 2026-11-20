@@ -9,6 +9,8 @@ license = "MIT OR Apache-2.0"
 keywords = ["bevy"]
 
 [features]
+# Coarse, stable per-create Tracy spans. Intentionally absent from defaults.
+pipeline_creation_diagnostics = []
 multi_threaded = ["bevy_tasks/multi_threaded", "bevy_transform/multi_threaded"]
 
 morph = ["bevy_mesh/morph"]

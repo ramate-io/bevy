@@ -33,6 +33,8 @@ use bevy_material::{
     MaterialProperties,
 };
 use bevy_math::{ops, proj, Mat4, UVec4, Vec3, Vec3Swizzles, Vec4, Vec4Swizzles};
+#[cfg(feature = "pipeline_creation_diagnostics")]
+use bevy_mesh::{Mesh, MeshVertexAttribute, VertexFormat};
 use bevy_mesh::{Mesh3d, MeshVertexBufferLayoutRef};
 use bevy_platform::collections::{HashMap, HashSet};
 use bevy_platform::hash::FixedHasher;
@@ -2413,6 +2415,121 @@ pub(crate) struct ShadowSpecializationWorkItem {
     layout: MeshVertexBufferLayoutRef,
     properties: Arc<MaterialProperties>,
     material_type_id: TypeId,
+    #[cfg(feature = "pipeline_creation_diagnostics")]
+    diagnostic_assets: Option<(bevy_asset::AssetId<Mesh>, UntypedAssetId)>,
+}
+
+#[cfg(feature = "pipeline_creation_diagnostics")]
+fn matches_skinned_shadow_request(
+    material_type: TypeId,
+    key: MeshPipelineKey,
+    layout: &MeshVertexBufferLayoutRef,
+) -> bool {
+    let layout = &layout.0;
+    let has_attribute = |attribute: MeshVertexAttribute, format: VertexFormat, offset: u64| {
+        layout
+            .attribute_ids()
+            .iter()
+            .zip(&layout.layout().attributes)
+            .any(|(id, vertex)| {
+                *id == attribute.id && vertex.format == format && vertex.offset == offset
+            })
+    };
+    material_type == TypeId::of::<StandardMaterial>()
+        && key.contains(MeshPipelineKey::UNCLIPPED_DEPTH_ORTHO)
+        && key.intersection(MeshPipelineKey::VIEW_PROJECTION_RESERVED_BITS)
+            == MeshPipelineKey::VIEW_PROJECTION_ORTHOGRAPHIC
+        && key.primitive_topology() == PrimitiveTopology::TriangleList
+        // StandardMaterial registers a prepass fragment shader even for this
+        // opaque depth-only pipeline, where the descriptor emits no fragment.
+        && key.intersection(MeshPipelineKey::ALL_PREPASS_BITS)
+            == (MeshPipelineKey::DEPTH_PREPASS | MeshPipelineKey::PREPASS_READS_MATERIAL)
+        && !key.intersects(MeshPipelineKey::MORPH_TARGETS | MeshPipelineKey::LIGHTMAPPED)
+        && layout.layout().array_stride == 48
+        && layout.layout().step_mode == VertexStepMode::Vertex
+        && !layout.contains(Mesh::ATTRIBUTE_UV_0)
+        && !layout.contains(Mesh::ATTRIBUTE_UV_1)
+        && has_attribute(Mesh::ATTRIBUTE_POSITION, VertexFormat::Float32x3, 0)
+        && has_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, VertexFormat::Float32x4, 24)
+        && has_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexFormat::Uint16x4, 40)
+}
+
+#[cfg(all(test, feature = "pipeline_creation_diagnostics"))]
+mod skinned_shadow_request_tests {
+    use super::*;
+    use bevy_asset::RenderAssetUsages;
+    use bevy_mesh::{MeshVertexBufferLayouts, VertexAttributeValues};
+    use bevy_shader::ShaderRef;
+
+    #[test]
+    fn matches_only_the_captured_skinned_directional_layout() {
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0, 0.0, 0.0]; 3])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 3])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, vec![[1.0, 0.0, 0.0, 0.0]; 3])
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_JOINT_INDEX,
+            VertexAttributeValues::Uint16x4(vec![[0, 0, 0, 0]; 3]),
+        );
+        let mut layouts = MeshVertexBufferLayouts::default();
+        let standard_material = TypeId::of::<StandardMaterial>();
+        assert!(!matches!(
+            <StandardMaterial as Material>::prepass_fragment_shader(),
+            ShaderRef::Default
+        ));
+        let key = MeshPipelineKey::from_primitive_topology_and_strip_index(
+            mesh.primitive_topology(),
+            None,
+        ) | MeshPipelineKey::DEPTH_PREPASS
+            | MeshPipelineKey::PREPASS_READS_MATERIAL
+            | MeshPipelineKey::VIEW_PROJECTION_ORTHOGRAPHIC
+            | MeshPipelineKey::UNCLIPPED_DEPTH_ORTHO;
+        let captured_layout = mesh.get_mesh_vertex_buffer_layout(&mut layouts);
+        assert!(matches_skinned_shadow_request(
+            standard_material,
+            key,
+            &captured_layout
+        ));
+        assert!(!matches_skinned_shadow_request(
+            TypeId::of::<()>(),
+            key,
+            &captured_layout
+        ));
+        for other_key in [
+            key.difference(MeshPipelineKey::UNCLIPPED_DEPTH_ORTHO),
+            key.difference(MeshPipelineKey::DEPTH_PREPASS),
+            key.difference(MeshPipelineKey::VIEW_PROJECTION_RESERVED_BITS)
+                | MeshPipelineKey::VIEW_PROJECTION_PERSPECTIVE,
+            key | MeshPipelineKey::NORMAL_PREPASS,
+            key | MeshPipelineKey::MAY_DISCARD,
+            key.difference(MeshPipelineKey::PREPASS_READS_MATERIAL),
+        ] {
+            assert!(!matches_skinned_shadow_request(
+                standard_material,
+                other_key,
+                &captured_layout
+            ));
+        }
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; 3]);
+        let uv_layout = mesh.get_mesh_vertex_buffer_layout(&mut layouts);
+        assert!(!matches_skinned_shadow_request(
+            standard_material,
+            key,
+            &uv_layout
+        ));
+
+        mesh.remove_attribute(Mesh::ATTRIBUTE_UV_0);
+        mesh.remove_attribute(Mesh::ATTRIBUTE_JOINT_INDEX);
+        let unskinned_layout = mesh.get_mesh_vertex_buffer_layout(&mut layouts);
+        assert!(!matches_skinned_shadow_request(
+            standard_material,
+            key,
+            &unskinned_layout
+        ));
+    }
 }
 
 /// Holds all entities with mesh materials for which the shadow pass couldn't be
@@ -2446,6 +2563,15 @@ pub(crate) fn specialize_shadows(
 ) {
     work_items.clear();
     all_shadow_views.clear();
+
+    #[cfg(feature = "pipeline_creation_diagnostics")]
+    let observe_skinned_shadow_requests = {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var_os("BEVY_SKINNED_SHADOW_REQUEST_DIAGNOSTICS")
+                .is_some_and(|value| value == "1")
+        })
+    };
 
     {
         let SpecializeShadowsSystemParam {
@@ -2595,6 +2721,15 @@ pub(crate) fn specialize_shadows(
                     mesh_key |= MeshPipelineKey::PREPASS_READS_MATERIAL;
                 }
 
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let diagnostic_assets = (observe_skinned_shadow_requests
+                    && matches_skinned_shadow_request(
+                        material_instance.asset_id.type_id(),
+                        mesh_key,
+                        &mesh.layout,
+                    ))
+                .then(|| (mesh_instance.mesh_asset_id(), material_instance.asset_id));
+
                 work_items.push(ShadowSpecializationWorkItem {
                     visible_entity: *visible_entity,
                     retained_view_entity: extracted_view_light.retained_view_entity,
@@ -2602,6 +2737,8 @@ pub(crate) fn specialize_shadows(
                     layout: mesh.layout.clone(),
                     properties: material.properties.clone(),
                     material_type_id: material_instance.asset_id.type_id(),
+                    #[cfg(feature = "pipeline_creation_diagnostics")]
+                    diagnostic_assets,
                 });
             }
         }
@@ -2645,6 +2782,27 @@ pub(crate) fn specialize_shadows(
 
         match prepass_specialize(world, &key, &item.layout, &item.properties) {
             Ok(pipeline_id) => {
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                if let Some((mesh_asset, material_asset)) = item.diagnostic_assets {
+                    let frame = world
+                        .get_resource::<bevy_diagnostic::FrameCount>()
+                        .map(|count| count.0);
+                    tracing::info!(
+                        target: "bevy_pbr::skinned_shadow_request",
+                        frame = ?frame,
+                        mesh_entity = ?item.visible_entity,
+                        mesh_asset = ?mesh_asset,
+                        material_asset = ?material_asset,
+                        light_entity = ?item.retained_view_entity.main_entity,
+                        camera_entity = ?item.retained_view_entity.auxiliary_entity,
+                        cascade = item.retained_view_entity.subview_index,
+                        mesh_key_bits = item.mesh_key.bits(),
+                        material_key_hash = bevy_platform::hash::fixed_hash_one(&key.material_key),
+                        vertex_layout = ?item.layout.0.layout(),
+                        pipeline_id = pipeline_id.id(),
+                        "skinned_directional_shadow_request"
+                    );
+                }
                 world
                     .resource_mut::<SpecializedShadowMaterialPipelineCache>()
                     .entry(item.retained_view_entity)

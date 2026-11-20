@@ -541,6 +541,13 @@ impl PipelineCache {
         let device = self.device.clone();
         let shader_cache = self.shader_cache.clone();
         let layout_cache = self.layout_cache.clone();
+        #[cfg(feature = "pipeline_creation_diagnostics")]
+        let _creation_bind_groups = creation_diagnostics::enter(
+            creation_diagnostics::Phase::BindGroups,
+            id,
+            descriptor.label.as_deref(),
+            "render",
+        );
         let mut bindgroup_layout_cache = self.bindgroup_layout_cache.lock().unwrap();
         let bind_group_layout = descriptor
             .layout
@@ -549,11 +556,29 @@ impl PipelineCache {
                 bindgroup_layout_cache.get(&self.device, bind_group_layout_descriptor)
             })
             .collect::<SmallVec<[_; BIND_GROUP_LAYOUTS_INLINE_CAPACITY]>>();
+        #[cfg(feature = "pipeline_creation_diagnostics")]
+        drop(_creation_bind_groups);
 
         create_pipeline_task(
             async move {
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_cache_locks = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::CacheLocks,
+                    id,
+                    descriptor.label.as_deref(),
+                    "render",
+                );
                 let mut shader_cache = shader_cache.lock().unwrap();
                 let mut layout_cache = layout_cache.lock().unwrap();
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_cache_locks);
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_shaders = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Shaders,
+                    id,
+                    descriptor.label.as_deref(),
+                    "render",
+                );
 
                 let vertex_module = match shader_cache.get(
                     id,
@@ -574,6 +599,15 @@ impl PipelineCache {
                     None => None,
                 };
 
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_shaders);
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_layout = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Layout,
+                    id,
+                    descriptor.label.as_deref(),
+                    "render",
+                );
                 let layout = if descriptor.layout.is_empty() && descriptor.immediate_size == 0 {
                     None
                 } else {
@@ -581,6 +615,8 @@ impl PipelineCache {
                 };
 
                 drop((shader_cache, layout_cache));
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_layout);
 
                 let vertex_buffer_layouts = descriptor
                     .vertex
@@ -647,6 +683,13 @@ impl PipelineCache {
                     cache: None,
                 };
 
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_backend = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Backend,
+                    id,
+                    descriptor.label.as_deref(),
+                    "render",
+                );
                 Ok(Pipeline::RenderPipeline(
                     device.create_render_pipeline(&descriptor),
                 ))
@@ -663,6 +706,13 @@ impl PipelineCache {
         let device = self.device.clone();
         let shader_cache = self.shader_cache.clone();
         let layout_cache = self.layout_cache.clone();
+        #[cfg(feature = "pipeline_creation_diagnostics")]
+        let _creation_bind_groups = creation_diagnostics::enter(
+            creation_diagnostics::Phase::BindGroups,
+            id,
+            descriptor.label.as_deref(),
+            "compute",
+        );
         let mut bindgroup_layout_cache = self.bindgroup_layout_cache.lock().unwrap();
         let bind_group_layout = descriptor
             .layout
@@ -671,11 +721,29 @@ impl PipelineCache {
                 bindgroup_layout_cache.get(&self.device, bind_group_layout_descriptor)
             })
             .collect::<SmallVec<[_; BIND_GROUP_LAYOUTS_INLINE_CAPACITY]>>();
+        #[cfg(feature = "pipeline_creation_diagnostics")]
+        drop(_creation_bind_groups);
 
         create_pipeline_task(
             async move {
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_cache_locks = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::CacheLocks,
+                    id,
+                    descriptor.label.as_deref(),
+                    "compute",
+                );
                 let mut shader_cache = shader_cache.lock().unwrap();
                 let mut layout_cache = layout_cache.lock().unwrap();
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_cache_locks);
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_shaders = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Shaders,
+                    id,
+                    descriptor.label.as_deref(),
+                    "compute",
+                );
 
                 let compute_module =
                     match shader_cache.get(id, descriptor.shader.id(), &descriptor.shader_defs) {
@@ -683,6 +751,15 @@ impl PipelineCache {
                         Err(err) => return Err(err),
                     };
 
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_shaders);
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_layout = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Layout,
+                    id,
+                    descriptor.label.as_deref(),
+                    "compute",
+                );
                 let layout = if descriptor.layout.is_empty() && descriptor.immediate_size == 0 {
                     None
                 } else {
@@ -690,6 +767,8 @@ impl PipelineCache {
                 };
 
                 drop((shader_cache, layout_cache));
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_layout);
 
                 let constants: Vec<(&str, f64)> = descriptor
                     .constants
@@ -709,6 +788,13 @@ impl PipelineCache {
                     cache: None,
                 };
 
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_backend = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Backend,
+                    id,
+                    descriptor.label.as_deref(),
+                    "compute",
+                );
                 Ok(Pipeline::ComputePipeline(
                     device.create_compute_pipeline(&descriptor),
                 ))
@@ -725,6 +811,13 @@ impl PipelineCache {
         let device = self.device.clone();
         let shader_cache = self.shader_cache.clone();
         let layout_cache = self.layout_cache.clone();
+        #[cfg(feature = "pipeline_creation_diagnostics")]
+        let _creation_bind_groups = creation_diagnostics::enter(
+            creation_diagnostics::Phase::BindGroups,
+            id,
+            descriptor.label.as_deref(),
+            "mesh",
+        );
         let mut bindgroup_layout_cache = self.bindgroup_layout_cache.lock().unwrap();
         let bind_group_layout = descriptor
             .layout
@@ -733,11 +826,29 @@ impl PipelineCache {
                 bindgroup_layout_cache.get(&self.device, bind_group_layout_descriptor)
             })
             .collect::<SmallVec<[_; BIND_GROUP_LAYOUTS_INLINE_CAPACITY]>>();
+        #[cfg(feature = "pipeline_creation_diagnostics")]
+        drop(_creation_bind_groups);
 
         create_pipeline_task(
             async move {
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_cache_locks = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::CacheLocks,
+                    id,
+                    descriptor.label.as_deref(),
+                    "mesh",
+                );
                 let mut shader_cache = shader_cache.lock().unwrap();
                 let mut layout_cache = layout_cache.lock().unwrap();
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_cache_locks);
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_shaders = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Shaders,
+                    id,
+                    descriptor.label.as_deref(),
+                    "mesh",
+                );
 
                 let mesh_module = match shader_cache.get(
                     id,
@@ -766,6 +877,15 @@ impl PipelineCache {
                     None => None,
                 };
 
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_shaders);
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_layout = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Layout,
+                    id,
+                    descriptor.label.as_deref(),
+                    "mesh",
+                );
                 let layout = if descriptor.layout.is_empty() && descriptor.immediate_size == 0 {
                     None
                 } else {
@@ -773,6 +893,8 @@ impl PipelineCache {
                 };
 
                 drop((shader_cache, layout_cache));
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                drop(_creation_layout);
 
                 let fragment_data = descriptor.fragment.as_ref().map(|fragment| {
                     (
@@ -847,6 +969,13 @@ impl PipelineCache {
                     cache: None,
                 };
 
+                #[cfg(feature = "pipeline_creation_diagnostics")]
+                let _creation_backend = creation_diagnostics::enter(
+                    creation_diagnostics::Phase::Backend,
+                    id,
+                    descriptor.label.as_deref(),
+                    "mesh",
+                );
                 Ok(Pipeline::MeshPipeline(
                     device.create_mesh_pipeline(&descriptor),
                 ))
@@ -1086,5 +1215,44 @@ fn create_pipeline_task(
     match bevy_tasks::block_on(task) {
         Ok(pipeline) => CachedPipelineState::Ok(pipeline),
         Err(err) => CachedPipelineState::Err(err),
+    }
+}
+
+// Kept behind a dedicated diagnostic feature: no counters, scans or queue changes.
+#[cfg(feature = "pipeline_creation_diagnostics")]
+mod creation_diagnostics {
+    pub(super) enum Phase {
+        BindGroups,
+        CacheLocks,
+        Shaders,
+        Layout,
+        Backend,
+    }
+
+    pub(super) fn enter(
+        phase: Phase,
+        id: super::CachedPipelineId,
+        label: Option<&str>,
+        kind: &'static str,
+    ) -> bevy_log::tracing::span::EnteredSpan {
+        macro_rules! phase_span {
+            ($name:literal) => {
+                bevy_log::trace_span!(
+                    target: "bevy_render.pipeline_creation",
+                    $name,
+                    pipeline = id,
+                    label = label.unwrap_or("<unlabelled>"),
+                    kind = kind,
+                )
+            };
+        }
+        let span = match phase {
+            Phase::BindGroups => phase_span!("pipeline.create.bind_group_prepare"),
+            Phase::CacheLocks => phase_span!("pipeline.create.cache_lock_wait"),
+            Phase::Shaders => phase_span!("pipeline.create.shader_prepare"),
+            Phase::Layout => phase_span!("pipeline.create.layout_prepare"),
+            Phase::Backend => phase_span!("pipeline.create.backend"),
+        };
+        span.entered()
     }
 }

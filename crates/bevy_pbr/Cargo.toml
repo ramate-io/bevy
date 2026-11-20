@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 keywords = ["bevy"]
 
 [features]
+pipeline_creation_diagnostics = []
 webgl = ["bevy_light/webgl"]
 webgpu = ["bevy_light/webgpu"]
 pbr_transmission_textures = ["bevy_gltf?/pbr_transmission_textures"]

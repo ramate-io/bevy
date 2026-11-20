@@ -10,6 +10,10 @@ keywords = ["game", "engine", "gamedev", "graphics", "bevy"]
 categories = ["game-engines", "graphics", "gui", "rendering"]
 
 [features]
+pipeline_creation_diagnostics = [
+  "bevy_render?/pipeline_creation_diagnostics",
+  "bevy_pbr?/pipeline_creation_diagnostics",
+]
 trace = [
   "bevy_anti_alias?/trace",
   "bevy_app/trace",
