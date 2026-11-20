@@ -74,6 +74,7 @@ pub use bevy_material_macros::DrawFunctionLabel;
 pub use bevy_material_macros::ShaderLabel;
 use bevy_render::renderer::RenderAdapterInfo;
 use core::{
+    any::TypeId,
     fmt::Debug,
     hash::Hash,
     iter,
@@ -90,6 +91,27 @@ use crate::render_resource::RawBufferVec as BinnedInputBuffer;
 pub use binned_input::BinnedInputBuffer;
 #[cfg(feature = "native_binned_dirty_upload_diagnostics")]
 pub use binned_input::BinnedInputUploadOutcome;
+
+/// Identifies the existing GPU metadata writer for one phase and buffer pipeline.
+///
+/// This passive label adds no ordering by itself. It lets an application order
+/// writers that already share `SceneUnpackingBuffers`, without registering them again.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, SystemSet)]
+pub struct BinnedPhaseBufferWriterSet {
+    phase: TypeId,
+    pipeline: TypeId,
+}
+
+impl BinnedPhaseBufferWriterSet {
+    /// Selects the same phase/pipeline pair as `BinnedRenderPhasePlugin`.
+    pub fn new<BPI: 'static, GFBD: 'static>() -> Self {
+        Self {
+            phase: TypeId::of::<BPI>(),
+            pipeline: TypeId::of::<GFBD>(),
+        }
+    }
+}
 
 /// Stores the rendering instructions for a single phase that uses bins in all
 /// views.
@@ -1666,6 +1688,7 @@ where
                             >,
                         )
                         .in_set(RenderSystems::PrepareResourcesWritePhaseBuffers)
+                        .in_set(BinnedPhaseBufferWriterSet::new::<BPI, GFBD>())
                         .ambiguous_with(RenderSystems::PrepareResourcesWritePhaseBuffers),
                     gpu_preprocessing::collect_buffers_for_phase::<BPI, GFBD>
                         .run_if(
