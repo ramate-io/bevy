@@ -72,6 +72,10 @@ use core::{
 use smallvec::SmallVec;
 use tracing::error;
 
+mod position_normal_companion;
+pub use position_normal_companion::prepare_position_normal_pipeline_companion;
+use position_normal_companion::PositionNormalPipelineCompanion;
+
 pub const MATERIAL_BIND_GROUP_INDEX: usize = 3;
 
 /// Materials are used alongside [`MaterialPlugin`], [`Mesh3d`], and [`MeshMaterial3d`]
@@ -1157,6 +1161,9 @@ pub(crate) fn specialize_material_meshes(
         pending_mesh_material_queues.expire_stale_views(&all_views);
     }
 
+    let mut companion = world
+        .get_resource::<PositionNormalPipelineCompanion>()
+        .copied();
     for item in work_items.drain(..) {
         let key = ErasedMaterialPipelineKey {
             type_id: item.material_type_id,
@@ -1167,6 +1174,10 @@ pub(crate) fn specialize_material_meshes(
         let Some(base_specialize) = item.properties.base_specialize else {
             continue;
         };
+        let companion_key = companion
+            .as_ref()
+            .filter(|companion| companion.accepts(&item))
+            .map(|_| key.clone());
         match base_specialize(world, key, &item.layout, &item.properties) {
             Ok(pipeline_id) => {
                 world
@@ -1174,9 +1185,20 @@ pub(crate) fn specialize_material_meshes(
                     .entry(item.retained_view_entity)
                     .or_default()
                     .insert(item.visible_entity, pipeline_id);
+                if let Some(companion) = companion.as_mut() {
+                    companion.observe(world, &item, pipeline_id);
+                    if let Some(key) = companion_key {
+                        companion.request(world, base_specialize, key, &item, pipeline_id);
+                    }
+                }
             }
             Err(err) => error!("{}", err),
         }
+    }
+    if let Some(companion) = companion {
+        world
+            .resource_mut::<PositionNormalPipelineCompanion>()
+            .set_if_neq(companion);
     }
 
     world
