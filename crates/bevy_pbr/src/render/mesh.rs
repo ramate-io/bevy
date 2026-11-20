@@ -1,3 +1,5 @@
+mod metadata_writer_order;
+
 use crate::contact_shadows::ContactShadows;
 use crate::{resources::prepare_atmosphere_buffers, skin::skin_uniforms_from_world};
 use alloc::sync::Arc;
@@ -192,6 +194,7 @@ impl Plugin for MeshRenderPlugin {
         ));
 
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            metadata_writer_order::configure_if_enabled(render_app);
             render_app
                 .init_gpu_resource::<MeshCullingDataBuffer>()
                 .init_resource::<RenderMaterialInstances>()
